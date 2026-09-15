@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"testing"
 
 	"github.com/lp/campus-market/internal/constants"
@@ -10,7 +11,10 @@ import (
 	"github.com/lp/campus-market/internal/util"
 )
 
+// fakeFavoriteRepo mimics the real repository's INSERT IGNORE semantics: a
+// conflicting insert is a no-op that leaves the model ID at zero.
 type fakeFavoriteRepo struct {
+	mu        sync.Mutex
 	favorites map[uint]*model.Favorite
 	nextID    uint
 }
@@ -20,6 +24,13 @@ func newFakeFavoriteRepo() *fakeFavoriteRepo {
 }
 
 func (f *fakeFavoriteRepo) Create(_ context.Context, fav *model.Favorite) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, existing := range f.favorites {
+		if existing.UserID == fav.UserID && existing.ProductID == fav.ProductID {
+			return nil // unique index ignored the insert; ID stays zero
+		}
+	}
 	fav.ID = f.nextID
 	f.nextID++
 	f.favorites[fav.ID] = fav
@@ -27,6 +38,8 @@ func (f *fakeFavoriteRepo) Create(_ context.Context, fav *model.Favorite) error 
 }
 
 func (f *fakeFavoriteRepo) FindByUserAndProduct(_ context.Context, userID, productID uint) (*model.Favorite, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for _, fav := range f.favorites {
 		if fav.UserID == userID && fav.ProductID == productID {
 			cp := *fav
@@ -37,6 +50,8 @@ func (f *fakeFavoriteRepo) FindByUserAndProduct(_ context.Context, userID, produ
 }
 
 func (f *fakeFavoriteRepo) Delete(_ context.Context, userID, productID uint) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for id, fav := range f.favorites {
 		if fav.UserID == userID && fav.ProductID == productID {
 			delete(f.favorites, id)
@@ -47,6 +62,8 @@ func (f *fakeFavoriteRepo) Delete(_ context.Context, userID, productID uint) err
 }
 
 func (f *fakeFavoriteRepo) ListByUser(_ context.Context, userID uint, status string) ([]model.Favorite, []model.Product, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	var out []model.Favorite
 	for _, fav := range f.favorites {
 		if fav.UserID == userID {
@@ -54,6 +71,12 @@ func (f *fakeFavoriteRepo) ListByUser(_ context.Context, userID uint, status str
 		}
 	}
 	return out, nil, nil
+}
+
+func (f *fakeFavoriteRepo) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.favorites)
 }
 
 // favoriteProductRepo adapts fakeProductRepo so ListByUser results can be
@@ -120,8 +143,8 @@ func TestFavoriteServiceAddGuards(t *testing.T) {
 		if first.ID != second.ID {
 			t.Fatalf("duplicate favorite created a new record: %d vs %d", first.ID, second.ID)
 		}
-		if len(favRepo.favorites) != 1 {
-			t.Fatalf("expected 1 favorite record, got %d", len(favRepo.favorites))
+		if favRepo.count() != 1 {
+			t.Fatalf("expected 1 favorite record, got %d", favRepo.count())
 		}
 	})
 
@@ -138,6 +161,46 @@ func TestFavoriteServiceAddGuards(t *testing.T) {
 	})
 }
 
+func TestFavoriteServiceAddConcurrent(t *testing.T) {
+	ctx := context.Background()
+	svc, favRepo, prodRepo := setupFavoriteSvc()
+	p := seedProduct(t, prodRepo, 1, 100, constants.ProductStatusOnSale)
+
+	const workers = 32
+	var wg sync.WaitGroup
+	errs := make([]error, workers)
+	ids := make([]uint, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			f, err := svc.Add(ctx, 2, p.ID)
+			errs[i] = err
+			if f != nil {
+				ids[i] = f.ID
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent request %d failed: %v", i, err)
+		}
+	}
+	if favRepo.count() != 1 {
+		t.Fatalf("expected exactly 1 favorite record, got %d", favRepo.count())
+	}
+	if ids[0] == 0 {
+		t.Fatalf("expected a non-zero favorite id")
+	}
+	for i, id := range ids {
+		if id != ids[0] {
+			t.Fatalf("request %d returned favorite id %d, want the shared id %d", i, id, ids[0])
+		}
+	}
+}
+
 func TestFavoriteServiceRemove(t *testing.T) {
 	ctx := context.Background()
 	svc, favRepo, prodRepo := setupFavoriteSvc()
@@ -148,7 +211,7 @@ func TestFavoriteServiceRemove(t *testing.T) {
 	if err := svc.Remove(ctx, 2, p.ID); err != nil {
 		t.Fatalf("unexpected remove error: %v", err)
 	}
-	if len(favRepo.favorites) != 0 {
+	if favRepo.count() != 0 {
 		t.Fatalf("expected favorite removed")
 	}
 	if err := svc.Remove(ctx, 2, p.ID); err == nil {
@@ -161,7 +224,7 @@ func TestFavoriteServiceRemove(t *testing.T) {
 	if err := svc.Remove(ctx, 3, p.ID); err == nil {
 		t.Fatalf("expected not found when other user removes")
 	}
-	if len(favRepo.favorites) != 1 {
+	if favRepo.count() != 1 {
 		t.Fatalf("other user's remove must not delete my favorite")
 	}
 }
@@ -265,3 +328,4 @@ func TestFavoriteServiceListMine(t *testing.T) {
 		}
 	})
 }
+

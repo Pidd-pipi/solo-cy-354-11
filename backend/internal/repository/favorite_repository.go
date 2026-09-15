@@ -6,6 +6,7 @@ import (
 	"github.com/lp/campus-market/internal/model"
 	"github.com/lp/campus-market/internal/util"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // FavoriteRepository persists favorite rows.
@@ -18,9 +19,12 @@ func NewFavoriteRepository(db *gorm.DB) *FavoriteRepository {
 	return &FavoriteRepository{db: db}
 }
 
-// Create inserts a new favorite.
+// Create inserts a new favorite. Concurrent duplicates of the same
+// (user_id, product_id) pair are ignored by the unique index instead of
+// failing, so the insert never errors on a lost race; in that case the
+// model's ID stays zero and the caller re-reads the canonical row.
 func (r *FavoriteRepository) Create(ctx context.Context, f *model.Favorite) error {
-	return db(ctx, r.db).Create(f).Error
+	return db(ctx, r.db).Clauses(clause.OnConflict{DoNothing: true}).Create(f).Error
 }
 
 // FindByUserAndProduct returns the favorite of one user for one product.

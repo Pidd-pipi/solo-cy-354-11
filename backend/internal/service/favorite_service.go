@@ -50,7 +50,23 @@ func (s *FavoriteService) Add(ctx context.Context, userID, productID uint) (*mod
 	}
 	f := &model.Favorite{UserID: userID, ProductID: productID, PriceAtFavorite: p.Price}
 	if err := s.favorites.Create(ctx, f); err != nil {
+		// A concurrent request may have inserted the same (user, product)
+		// pair first; treat the existing row as the result instead of failing.
+		if existing, ferr := s.favorites.FindByUserAndProduct(ctx, userID, productID); ferr == nil {
+			s.logger.Info(fmt.Sprintf(constants.LogFavoriteDuplicate, userID, productID))
+			return existing, nil
+		}
 		return nil, util.WrapAppError(fmt.Errorf("favorite[user=%d] add product[id=%d]: %w", userID, productID, err), 500, constants.CodeInternalError, constants.MsgInternalError)
+	}
+	if f.ID == 0 {
+		// The unique index ignored our insert because a concurrent request
+		// won the race; return the canonical row it created.
+		existing, err := s.favorites.FindByUserAndProduct(ctx, userID, productID)
+		if err != nil {
+			return nil, util.WrapAppError(fmt.Errorf("favorite[user=%d] add refetch product[id=%d]: %w", userID, productID, err), 500, constants.CodeInternalError, constants.MsgInternalError)
+		}
+		s.logger.Info(fmt.Sprintf(constants.LogFavoriteDuplicate, userID, productID))
+		return existing, nil
 	}
 	s.logger.Info(fmt.Sprintf(constants.LogFavoriteAddSuccess, f.ID, userID, productID))
 	return f, nil
