@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"testing"
@@ -329,3 +330,257 @@ func TestFavoriteServiceListMine(t *testing.T) {
 	})
 }
 
+// raceFallbackRepo simulates a request that always loses the insert race:
+// the pre-insert lookup misses, its own insert is ignored by the unique
+// index (model ID stays zero), and the rival's canonical row appears on the
+// refetch. It also serves list queries for price-drop regression checks.
+type raceFallbackRepo struct {
+	mu       sync.Mutex
+	row      *model.Favorite
+	products []model.Product
+	inserted bool
+}
+
+func (r *raceFallbackRepo) Create(_ context.Context, _ *model.Favorite) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.inserted = true // rival row now exists; our insert was ignored
+	return nil
+}
+
+func (r *raceFallbackRepo) FindByUserAndProduct(_ context.Context, userID, productID uint) (*model.Favorite, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.inserted || r.row == nil || r.row.UserID != userID || r.row.ProductID != productID {
+		return nil, util.ErrNotFound
+	}
+	cp := *r.row
+	return &cp, nil
+}
+
+func (r *raceFallbackRepo) Delete(context.Context, uint, uint) error { return util.ErrNotFound }
+
+func (r *raceFallbackRepo) ListByUser(_ context.Context, userID uint, _ string) ([]model.Favorite, []model.Product, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.inserted || r.row == nil || r.row.UserID != userID {
+		return nil, r.products, nil
+	}
+	return []model.Favorite{*r.row}, r.products, nil
+}
+
+// lostRowRepo ignores the insert but the refetch finds nothing.
+type lostRowRepo struct{}
+
+func (lostRowRepo) Create(context.Context, *model.Favorite) error { return nil }
+func (lostRowRepo) FindByUserAndProduct(context.Context, uint, uint) (*model.Favorite, error) {
+	return nil, util.ErrNotFound
+}
+func (lostRowRepo) Delete(context.Context, uint, uint) error { return util.ErrNotFound }
+func (lostRowRepo) ListByUser(context.Context, uint, string) ([]model.Favorite, []model.Product, error) {
+	return nil, nil, nil
+}
+
+// flakyCreateRepo fails the insert (e.g. duplicate entry) while the
+// canonical row becomes visible only after the failed insert attempt.
+type flakyCreateRepo struct {
+	row      *model.Favorite
+	inserted bool
+}
+
+func (r *flakyCreateRepo) Create(context.Context, *model.Favorite) error {
+	r.inserted = true
+	return errors.New("duplicate entry")
+}
+func (r *flakyCreateRepo) FindByUserAndProduct(_ context.Context, userID, productID uint) (*model.Favorite, error) {
+	if !r.inserted || r.row == nil || r.row.UserID != userID || r.row.ProductID != productID {
+		return nil, util.ErrNotFound
+	}
+	cp := *r.row
+	return &cp, nil
+}
+func (r *flakyCreateRepo) Delete(context.Context, uint, uint) error { return util.ErrNotFound }
+func (r *flakyCreateRepo) ListByUser(context.Context, uint, string) ([]model.Favorite, []model.Product, error) {
+	return nil, nil, nil
+}
+
+// brokenCreateRepo fails the insert and nothing is found afterwards.
+type brokenCreateRepo struct{}
+
+func (brokenCreateRepo) Create(context.Context, *model.Favorite) error {
+	return errors.New("connection reset")
+}
+func (brokenCreateRepo) FindByUserAndProduct(context.Context, uint, uint) (*model.Favorite, error) {
+	return nil, util.ErrNotFound
+}
+func (brokenCreateRepo) Delete(context.Context, uint, uint) error { return util.ErrNotFound }
+func (brokenCreateRepo) ListByUser(context.Context, uint, string) ([]model.Favorite, []model.Product, error) {
+	return nil, nil, nil
+}
+
+func TestFavoriteServiceAddConflictFallback(t *testing.T) {
+	ctx := context.Background()
+
+	setupRace := func() (*FavoriteService, *raceFallbackRepo) {
+		prodRepo := newFakeProductRepo()
+		// The product now sells for 80, but the rival request favorited it at 100.
+		p := &model.Product{
+			SellerID: 1, Title: "测试商品", Price: 80,
+			Category: constants.ProductCategoryBooks, Condition: "九成新",
+			Campus: "东校区", TradeLocation: "东门", Status: constants.ProductStatusOnSale,
+		}
+		if err := prodRepo.Create(ctx, p); err != nil {
+			t.Fatalf("seed product: %v", err)
+		}
+		repo := &raceFallbackRepo{
+			row:      &model.Favorite{ID: 7, UserID: 2, ProductID: p.ID, PriceAtFavorite: 100},
+			products: []model.Product{*p},
+		}
+		return NewFavoriteService(repo, prodRepo, slog.Default()), repo
+	}
+
+	t.Run("ignored insert returns the existing record", func(t *testing.T) {
+		svc, _ := setupRace()
+		f, err := svc.Add(ctx, 2, 1)
+		if err != nil {
+			t.Fatalf("conflict fallback must not fail: %v", err)
+		}
+		if f.ID != 7 {
+			t.Fatalf("expected the canonical favorite id 7, got %d", f.ID)
+		}
+	})
+
+	t.Run("first favorite price is not overwritten by the conflict", func(t *testing.T) {
+		svc, _ := setupRace()
+		f, err := svc.Add(ctx, 2, 1)
+		if err != nil {
+			t.Fatalf("conflict fallback must not fail: %v", err)
+		}
+		if f.PriceAtFavorite != 100 {
+			t.Fatalf("price_at_favorite must stay 100 from the first favorite, got %v", f.PriceAtFavorite)
+		}
+	})
+
+	t.Run("price drop reminder still computed after conflict fallback", func(t *testing.T) {
+		svc, _ := setupRace()
+		if _, err := svc.Add(ctx, 2, 1); err != nil {
+			t.Fatalf("conflict fallback must not fail: %v", err)
+		}
+		items, err := svc.ListMine(ctx, 2, "")
+		if err != nil {
+			t.Fatalf("unexpected list error: %v", err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("expected 1 favorite item, got %d", len(items))
+		}
+		it := items[0]
+		if !it.PriceDropped || it.PriceAtFavorite != 100 || it.CurrentPrice != 80 {
+			t.Fatalf("expected price drop 100 -> 80, got %+v", it)
+		}
+	})
+
+	t.Run("refetch miss after ignored insert returns a clear error", func(t *testing.T) {
+		prodRepo := newFakeProductRepo()
+		p := &model.Product{
+			SellerID: 1, Title: "测试商品", Price: 80,
+			Category: constants.ProductCategoryBooks, Condition: "九成新",
+			Campus: "东校区", TradeLocation: "东门", Status: constants.ProductStatusOnSale,
+		}
+		if err := prodRepo.Create(ctx, p); err != nil {
+			t.Fatalf("seed product: %v", err)
+		}
+		svc := NewFavoriteService(lostRowRepo{}, prodRepo, slog.Default())
+		_, err := svc.Add(ctx, 2, p.ID)
+		if err == nil {
+			t.Fatalf("expected an error when the refetch finds no row")
+		}
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) {
+			t.Fatalf("expected AppError, got %T: %v", err, err)
+		}
+		if appErr.Status != 500 || appErr.Code != constants.CodeInternalError {
+			t.Fatalf("expected 500/internal error, got status=%d code=%d", appErr.Status, appErr.Code)
+		}
+	})
+
+	t.Run("insert error returns the existing row when visible", func(t *testing.T) {
+		prodRepo := newFakeProductRepo()
+		p := &model.Product{
+			SellerID: 1, Title: "测试商品", Price: 80,
+			Category: constants.ProductCategoryBooks, Condition: "九成新",
+			Campus: "东校区", TradeLocation: "东门", Status: constants.ProductStatusOnSale,
+		}
+		if err := prodRepo.Create(ctx, p); err != nil {
+			t.Fatalf("seed product: %v", err)
+		}
+		repo := &flakyCreateRepo{row: &model.Favorite{ID: 9, UserID: 2, ProductID: p.ID, PriceAtFavorite: 100}}
+		svc := NewFavoriteService(repo, prodRepo, slog.Default())
+		f, err := svc.Add(ctx, 2, p.ID)
+		if err != nil {
+			t.Fatalf("duplicate insert error must fall back to the existing row: %v", err)
+		}
+		if f.ID != 9 || f.PriceAtFavorite != 100 {
+			t.Fatalf("expected canonical row id=9 price=100, got %+v", f)
+		}
+	})
+
+	t.Run("insert error without a visible row returns a clear error", func(t *testing.T) {
+		prodRepo := newFakeProductRepo()
+		p := &model.Product{
+			SellerID: 1, Title: "测试商品", Price: 80,
+			Category: constants.ProductCategoryBooks, Condition: "九成新",
+			Campus: "东校区", TradeLocation: "东门", Status: constants.ProductStatusOnSale,
+		}
+		if err := prodRepo.Create(ctx, p); err != nil {
+			t.Fatalf("seed product: %v", err)
+		}
+		svc := NewFavoriteService(brokenCreateRepo{}, prodRepo, slog.Default())
+		_, err := svc.Add(ctx, 2, p.ID)
+		if err == nil {
+			t.Fatalf("expected an error when insert fails and no row exists")
+		}
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) {
+			t.Fatalf("expected AppError, got %T: %v", err, err)
+		}
+		if appErr.Status != 500 || appErr.Code != constants.CodeInternalError {
+			t.Fatalf("expected 500/internal error, got status=%d code=%d", appErr.Status, appErr.Code)
+		}
+	})
+}
+
+func TestFavoriteServiceGuardsNotRegressed(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("seller favorite own product stays forbidden and writes nothing", func(t *testing.T) {
+		svc, favRepo, prodRepo := setupFavoriteSvc()
+		p := seedProduct(t, prodRepo, 1, 100, constants.ProductStatusOnSale)
+		_, err := svc.Add(ctx, 1, p.ID)
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) {
+			t.Fatalf("expected AppError, got %T: %v", err, err)
+		}
+		if appErr.Status != 403 || appErr.Code != constants.CodeForbidden {
+			t.Fatalf("expected 403/forbidden, got status=%d code=%d", appErr.Status, appErr.Code)
+		}
+		if favRepo.count() != 0 {
+			t.Fatalf("forbidden favorite must not create a record")
+		}
+	})
+
+	t.Run("not-on-sale favorite stays conflict and writes nothing", func(t *testing.T) {
+		svc, favRepo, prodRepo := setupFavoriteSvc()
+		p := seedProduct(t, prodRepo, 1, 100, constants.ProductStatusSold)
+		_, err := svc.Add(ctx, 2, p.ID)
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) {
+			t.Fatalf("expected AppError, got %T: %v", err, err)
+		}
+		if appErr.Status != 409 || appErr.Code != constants.CodeConflict {
+			t.Fatalf("expected 409/conflict, got status=%d code=%d", appErr.Status, appErr.Code)
+		}
+		if favRepo.count() != 0 {
+			t.Fatalf("conflict favorite must not create a record")
+		}
+	})
+}
