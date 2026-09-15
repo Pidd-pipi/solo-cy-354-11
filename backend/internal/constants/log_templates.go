@@ -32,7 +32,11 @@ const (
 	LogRateLimitReached            = "rate limit reached: ip=%s route=%s"
 	LogSeedingCompleted            = "database seeding completed: users=%d products=%d"
 	LogReportHandleSuccess         = "report handled: report_id=%d action=%s"
+	LogFavoriteAddSuccess          = "favorite add success: favorite_id=%d user_id=%d product_id=%d"
+	LogFavoriteDuplicate           = "favorite duplicate ignored: user_id=%d product_id=%d"
+	LogFavoriteRemoveSuccess       = "favorite remove success: user_id=%d product_id=%d"
+	LogProductPriceUpdateSuccess   = "product price update success: product_id=%d old_price=%.2f new_price=%.2f"
 )
 
 // LogTemplateCount guards the "at least 25 templates" requirement.
-const LogTemplateCount = 31
+const LogTemplateCount = 35

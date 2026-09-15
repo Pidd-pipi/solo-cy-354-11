@@ -94,6 +94,16 @@ CREATE TABLE IF NOT EXISTS book_exchanges (
   INDEX idx_book_exchanges_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS favorites (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id BIGINT UNSIGNED NOT NULL,
+  product_id BIGINT UNSIGNED NOT NULL,
+  price_at_favorite DECIMAL(10,2) NOT NULL,
+  created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uk_favorites_user_product (user_id, product_id),
+  INDEX idx_favorites_product (product_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- 种子账号（bcrypt）
 -- 13700000001/123456 小明同学；13700000002/123456 阿珍；13700000003/123456 二手达人；13800000001/admin123 平台管理员
 INSERT INTO users (phone, password_hash, nickname, avatar, role, campus, credit_score) VALUES

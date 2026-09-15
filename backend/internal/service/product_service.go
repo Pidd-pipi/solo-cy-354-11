@@ -15,8 +15,9 @@ import (
 type ProductRepository interface {
 	Create(ctx context.Context, p *model.Product) error
 	FindByID(ctx context.Context, id uint) (*model.Product, error)
-	List(ctx context.Context, category, campus, keyword, status string, page, pageSize int) ([]model.Product, int64, error)
+	List(ctx context.Context, category, campus, keyword, status string, sellerID uint, page, pageSize int) ([]model.Product, int64, error)
 	UpdateStatus(ctx context.Context, id uint, status string) error
+	UpdatePrice(ctx context.Context, id uint, price float64) error
 	Count(ctx context.Context) (int64, error)
 }
 
@@ -62,7 +63,7 @@ func (s *ProductService) Get(ctx context.Context, id uint) (*model.Product, erro
 // List filters products.
 func (s *ProductService) List(ctx context.Context, q *dto.ListProductQuery) (*dto.PageResult, error) {
 	q.Normalize()
-	items, total, err := s.products.List(ctx, q.Category, q.Campus, q.Keyword, q.Status, q.Page, q.PageSize)
+	items, total, err := s.products.List(ctx, q.Category, q.Campus, q.Keyword, q.Status, q.SellerID, q.Page, q.PageSize)
 	if err != nil {
 		return nil, util.WrapAppError(fmt.Errorf("product list: %w", err), 500, constants.CodeInternalError, constants.MsgInternalError)
 	}
@@ -93,4 +94,25 @@ func (s *ProductService) MarkSold(ctx context.Context, productID uint) error {
 	}
 	s.logger.Info(fmt.Sprintf(constants.LogProductSoldSuccess, productID))
 	return nil
+}
+
+// UpdatePrice lets the seller change the price of an on-sale product. Buyers
+// who favorited it see a price-drop mark when the new price is lower.
+func (s *ProductService) UpdatePrice(ctx context.Context, sellerID, productID uint, price float64) (*model.Product, error) {
+	p, err := s.products.FindByID(ctx, productID)
+	if err != nil {
+		return nil, util.WrapAppError(fmt.Errorf("product[id=%d] update price find: %w", productID, err), 404, constants.CodeNotFound, constants.MsgNotFound)
+	}
+	if p.SellerID != sellerID {
+		return nil, util.NewAppError(403, constants.CodeForbidden, constants.MsgForbidden, nil)
+	}
+	if p.Status != constants.ProductStatusOnSale {
+		return nil, util.NewAppError(409, constants.CodeConflict, constants.MsgProductNotOnSale, nil)
+	}
+	if err := s.products.UpdatePrice(ctx, productID, price); err != nil {
+		return nil, util.WrapAppError(fmt.Errorf("product[id=%d] update price: %w", productID, err), 500, constants.CodeInternalError, constants.MsgInternalError)
+	}
+	s.logger.Info(fmt.Sprintf(constants.LogProductPriceUpdateSuccess, productID, p.Price, price))
+	p.Price = price
+	return p, nil
 }

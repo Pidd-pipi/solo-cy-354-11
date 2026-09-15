@@ -78,6 +78,17 @@ export interface BookExchange {
   created_at: string
 }
 
+export interface FavoriteItem {
+  id: number
+  user_id: number
+  product_id: number
+  price_at_favorite: number
+  current_price: number
+  price_dropped: boolean
+  created_at: string
+  product: Product | null
+}
+
 export interface PageResult<T> {
   items: T[]
   total: number

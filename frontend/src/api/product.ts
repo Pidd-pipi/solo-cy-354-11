@@ -8,6 +8,7 @@ export interface ProductQuery {
   campus?: string
   keyword?: string
   status?: string
+  seller_id?: number
 }
 
 export function listProducts(params: ProductQuery) {
@@ -24,6 +25,10 @@ export function createProduct(data: Partial<Product>) {
 
 export function removeProduct(id: number) {
   return request.delete<never, { code: number; message: string; data: Product }>(`/products/${id}`)
+}
+
+export function updateProductPrice(id: number, price: number) {
+  return request.put<never, { code: number; message: string; data: Product }>(`/products/${id}/price`, { price })
 }
 
 export function listGraduation() {

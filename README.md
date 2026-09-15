@@ -1,6 +1,6 @@
 # CampusMarket（校园二手交易平台）
 
-一款面向高校学生的校内 C2C 交易平台，覆盖闲置物品发布、价格协商私信、交易达成确认、信誉评分举报、毕业季专场与书籍交换等场景。
+一款面向高校学生的校内 C2C 交易平台，覆盖闲置物品发布、价格协商私信、交易达成确认、信誉评分举报、毕业季专场与书籍交换等场景。支持商品收藏与降价提醒：买家可收藏在售商品，收藏页按在售/已下架/已售出分组展示；卖家下调在售商品价格后，收藏页会展示收藏时价格、当前价格与「已降价」标记（涨价或未降价不提醒）。
 
 ## 快速启动（Docker Compose 一键部署）
 
@@ -95,7 +95,7 @@ cy-354/
         ├── stores/          # authStore, userStore, productStore, tradeStore
         ├── components/common/# ProductCard, ProductForm, MessageBubble, TradeStatusBadge, ExchangeCard
         ├── hooks/           # useAuth, useProducts, useConversations
-        ├── pages/           # Products, Publish, Messages, Orders, BookExchange, Graduation, Profile, Login, Register
+        ├── pages/           # Products, Publish, Messages, Orders, Favorites, BookExchange, Graduation, Profile, Login, Register
         ├── router/          # index.ts + guards.ts
         ├── utils/           # request, dateFormat, priceFormatter
         ├── constants/       # product, trade, user, errorCodes
@@ -137,7 +137,8 @@ cy-354/
 - 响应格式：`{ "code": 0, "message": "ok", "data": ... }`，错误码见 `backend/internal/constants/error_codes.go`。
 - 核心接口：
   - `POST /api/v1/users/register`、`POST /api/v1/users/login`、`GET/PUT /api/v1/users/me`
-  - `GET/POST /api/v1/products`、`GET/DELETE /api/v1/products/:id`、`GET /api/v1/products/graduation`
+  - `GET/POST /api/v1/products`、`GET/DELETE /api/v1/products/:id`、`PUT /api/v1/products/:id/price`、`GET /api/v1/products/graduation`
+  - `POST /api/v1/favorites`、`GET /api/v1/favorites/me`、`DELETE /api/v1/favorites/:productId`
   - `POST /api/v1/conversations`、`GET /api/v1/conversations/me`、`GET/POST /api/v1/conversations/:id/messages`
   - `POST /api/v1/trade-orders`、`GET /api/v1/trade-orders/me`、`POST /api/v1/trade-orders/:id/buyer-confirm|seller-confirm|cancel`
   - `POST /api/v1/reviews`、`GET /api/v1/reviews/me`
@@ -159,7 +160,11 @@ cy-354/
 | GET | `/api/v1/products/graduation` | 毕业季专场列表 | 无 |
 | GET | `/api/v1/products/:id` | 商品详情 | 无 |
 | POST | `/api/v1/products` | 发布商品 | 登录 |
+| PUT | `/api/v1/products/:id/price` | 卖家修改在售商品价格 | 登录（卖家本人） |
 | DELETE | `/api/v1/products/:id` | 下架自己的商品 | 登录 |
+| POST | `/api/v1/favorites` | 收藏在售商品（重复收藏只保留一条；卖家不能收藏自己的商品） | 登录 |
+| GET | `/api/v1/favorites/me` | 我的收藏列表（含收藏时价格、现价、降价标记，可按商品状态过滤） | 登录 |
+| DELETE | `/api/v1/favorites/:productId` | 取消收藏 | 登录 |
 | POST | `/api/v1/conversations` | 发起/复用私信会话 | 登录 |
 | GET | `/api/v1/conversations/me` | 我的会话列表 | 登录 |
 | GET | `/api/v1/conversations/:id/messages` | 会话消息记录 | 登录 |

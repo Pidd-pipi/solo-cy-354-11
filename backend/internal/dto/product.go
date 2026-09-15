@@ -19,4 +19,5 @@ type ListProductQuery struct {
 	Campus   string `form:"campus"`
 	Keyword  string `form:"keyword"`
 	Status   string `form:"status"`
+	SellerID uint   `form:"seller_id"`
 }

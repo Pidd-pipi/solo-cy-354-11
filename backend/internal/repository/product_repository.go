@@ -33,8 +33,8 @@ func (r *ProductRepository) FindByID(ctx context.Context, id uint) (*model.Produ
 	return &p, nil
 }
 
-// List filters products by category/campus/keyword/status with pagination.
-func (r *ProductRepository) List(ctx context.Context, category, campus, keyword, status string, page, pageSize int) ([]model.Product, int64, error) {
+// List filters products by category/campus/keyword/status/seller with pagination.
+func (r *ProductRepository) List(ctx context.Context, category, campus, keyword, status string, sellerID uint, page, pageSize int) ([]model.Product, int64, error) {
 	q := db(ctx, r.db).Model(&model.Product{})
 	if category != "" {
 		q = q.Where("category = ?", category)
@@ -44,6 +44,9 @@ func (r *ProductRepository) List(ctx context.Context, category, campus, keyword,
 	}
 	if status != "" {
 		q = q.Where("status = ?", status)
+	}
+	if sellerID != 0 {
+		q = q.Where("seller_id = ?", sellerID)
 	}
 	if keyword != "" {
 		q = q.Where("title LIKE ? OR description LIKE ?", "%"+keyword+"%", "%"+keyword+"%")
@@ -63,6 +66,18 @@ func (r *ProductRepository) List(ctx context.Context, category, campus, keyword,
 // UpdateStatus sets the product status.
 func (r *ProductRepository) UpdateStatus(ctx context.Context, id uint, status string) error {
 	res := db(ctx, r.db).Model(&model.Product{}).Where("id = ?", id).Update("status", status)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return util.ErrNotFound
+	}
+	return nil
+}
+
+// UpdatePrice sets the product price.
+func (r *ProductRepository) UpdatePrice(ctx context.Context, id uint, price float64) error {
+	res := db(ctx, r.db).Model(&model.Product{}).Where("id = ?", id).Update("price", price)
 	if res.Error != nil {
 		return res.Error
 	}

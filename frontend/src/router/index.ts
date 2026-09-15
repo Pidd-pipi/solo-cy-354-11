@@ -4,6 +4,7 @@ import Products from '../pages/Products.vue'
 import Publish from '../pages/Publish.vue'
 import Messages from '../pages/Messages.vue'
 import Orders from '../pages/Orders.vue'
+import Favorites from '../pages/Favorites.vue'
 import BookExchange from '../pages/BookExchange.vue'
 import Graduation from '../pages/Graduation.vue'
 import Profile from '../pages/Profile.vue'
@@ -16,6 +17,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/publish', component: Publish, meta: { requiresAuth: true } },
   { path: '/messages', component: Messages, meta: { requiresAuth: true } },
   { path: '/orders', component: Orders, meta: { requiresAuth: true } },
+  { path: '/favorites', component: Favorites, meta: { requiresAuth: true } },
   { path: '/book-exchange', component: BookExchange },
   { path: '/graduation', component: Graduation },
   { path: '/profile', component: Profile, meta: { requiresAuth: true } },

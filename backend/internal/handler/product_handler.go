@@ -94,6 +94,31 @@ func (h *ProductHandler) Remove(c *gin.Context) {
 	util.OK(c, p)
 }
 
+// UpdatePrice handles PUT /products/:id/price.
+func (h *ProductHandler) UpdatePrice(c *gin.Context) {
+	userID, err := middleware.CurrentUserID(c)
+	if err != nil {
+		util.Fail(c, http.StatusUnauthorized, constants.CodeUnauthorized, constants.MsgUnauthorized)
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		util.Fail(c, http.StatusBadRequest, constants.CodeBadRequest, "商品ID不合法")
+		return
+	}
+	var req dto.UpdateProductPriceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		util.Fail(c, http.StatusBadRequest, constants.CodeValidation, constants.MsgValidationFailed)
+		return
+	}
+	p, err := h.svc.UpdatePrice(c.Request.Context(), userID, uint(id), req.Price)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+	util.OK(c, p)
+}
+
 // Graduation handles GET /products/graduation (毕业季专场).
 func (h *ProductHandler) Graduation(c *gin.Context) {
 	result, err := h.svc.List(c.Request.Context(), &dto.ListProductQuery{PageQuery: dto.PageQuery{Page: 1, PageSize: 50}, Status: constants.ProductStatusOnSale})

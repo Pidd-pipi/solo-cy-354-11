@@ -19,7 +19,16 @@
     </el-form>
     <el-row :gutter="16">
       <el-col v-for="p in products" :key="p.id" :span="6" class="col">
-        <ProductCard :product="p" @detail="showDetail" @buy="buy" @chat="chat" />
+        <ProductCard
+          :product="p"
+          show-chat
+          show-fav
+          :favorited="favoritedIds.has(p.id)"
+          @detail="showDetail"
+          @buy="buy"
+          @chat="chat"
+          @fav="toggleFav"
+        />
       </el-col>
     </el-row>
     <el-empty v-if="!loading && products.length === 0" description="暂无商品" />
@@ -45,6 +54,7 @@ import { PRODUCT_CATEGORIES, categoryLabel, productStatusLabel } from '../consta
 import { useProducts } from '../hooks/useProducts'
 import { createTradeOrder } from '../api/tradeOrder'
 import { createConversation } from '../api/conversation'
+import { addFavorite, listMyFavorites, removeFavorite } from '../api/favorite'
 import type { Product } from '../types'
 import { useAuthStore } from '../stores/authStore'
 import { useRouter } from 'vue-router'
@@ -53,6 +63,7 @@ const { products, loading, load } = useProducts()
 const query = reactive<{ category?: string; campus?: string; keyword?: string }>({})
 const detailVisible = ref(false)
 const current = ref<Product | null>(null)
+const favoritedIds = ref<Set<number>>(new Set())
 const authStore = useAuthStore()
 const router = useRouter()
 
@@ -82,7 +93,35 @@ async function chat(p: Product) {
   router.push('/messages')
 }
 
-onMounted(() => load())
+async function toggleFav(p: Product) {
+  if (!authStore.token) {
+    ElMessage.warning('请先登录')
+    router.push('/login')
+    return
+  }
+  if (favoritedIds.value.has(p.id)) {
+    await removeFavorite(p.id)
+    favoritedIds.value.delete(p.id)
+    favoritedIds.value = new Set(favoritedIds.value)
+    ElMessage.success('已取消收藏')
+  } else {
+    await addFavorite(p.id)
+    favoritedIds.value.add(p.id)
+    favoritedIds.value = new Set(favoritedIds.value)
+    ElMessage.success('收藏成功，降价时将在收藏页提醒')
+  }
+}
+
+async function loadFavorites() {
+  if (!authStore.token) return
+  const res = await listMyFavorites()
+  favoritedIds.value = new Set(res.data.map((f) => f.product_id))
+}
+
+onMounted(() => {
+  load()
+  loadFavorites()
+})
 </script>
 
 <style scoped>

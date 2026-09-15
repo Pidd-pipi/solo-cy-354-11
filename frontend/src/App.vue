@@ -10,6 +10,7 @@
         <el-menu-item index="/publish">发布商品</el-menu-item>
         <el-menu-item index="/messages">私信</el-menu-item>
         <el-menu-item index="/orders">我的交易</el-menu-item>
+        <el-menu-item index="/favorites">我的收藏</el-menu-item>
         <el-menu-item index="/book-exchange">书籍交换</el-menu-item>
         <el-menu-item index="/graduation">毕业季专场</el-menu-item>
         <el-menu-item index="/profile">个人中心</el-menu-item>
